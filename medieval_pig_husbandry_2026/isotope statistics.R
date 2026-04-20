@@ -11,7 +11,6 @@ out_xlsx  <- "isotope_statistics_results.xlsx"
 plot_dir  <- "plots_isotopes"
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
 
-# ---------------- Import (skip grouped header row) ----------------
 raw <- read_excel(file_path, skip = 1)
 
 dat <- raw %>%
@@ -35,45 +34,82 @@ dat <- raw %>%
 
 iso_cols <- c("dN","dC","dS","bN","bC")
 
-# ---------------- Long format ----------------
+
+iso_labels_expr <- list(
+  dN = expression(delta^15 * N[dentine]),
+  dC = expression(delta^13 * C[dentine]),
+  dS = expression(delta^34 * S[dentine]),
+  bN = expression(delta^15 * N[bone]),
+  bC = expression(delta^13 * C[bone])
+)
+
+iso_labels_text <- c(
+  dN = "δ15N_dentine",
+  dC = "δ13C_dentine",
+  dS = "δ34S_dentine",
+  bN = "δ15N_bone",
+  bC = "δ13C_bone"
+)
+
+
 long <- dat %>%
   pivot_longer(all_of(iso_cols), names_to = "isotope", values_to = "value") %>%
   filter(!is.na(value))
 
-# ---------------- Plot function ----------------
+
 save_plots <- function(df_long, group_var, prefix) {
   for (iso in unique(df_long$isotope)) {
     x <- df_long %>% filter(isotope == iso, !is.na(.data[[group_var]]))
     if (nrow(x) == 0) next
-    
+
+    iso_lab <- iso_labels_expr[[iso]]
+
     p_ridge <- ggplot(x, aes(x = value, y = .data[[group_var]], fill = .data[[group_var]])) +
       ggridges::geom_density_ridges(alpha = 0.6, show.legend = FALSE) +
-      labs(title = paste0(prefix, " – ", iso, " (ridge)"), x = iso, y = group_var) +
+      labs(
+        title = paste0(prefix, " – ", iso_labels_text[[iso]], " (ridge)"),
+        x = iso_lab,
+        y = group_var
+      ) +
       theme_classic()
-    
+
     p_box <- ggplot(x, aes(x = .data[[group_var]], y = value)) +
       geom_boxplot(outlier.shape = NA) +
       geom_jitter(width = 0.15, height = 0, alpha = 0.85) +
-      labs(title = paste0(prefix, " – ", iso, " (box + points)"), x = group_var, y = iso) +
+      labs(
+        title = paste0(prefix, " – ", iso_labels_text[[iso]], " (box + points)"),
+        x = group_var,
+        y = iso_lab
+      ) +
       theme_classic()
-    
+
     p_qq <- ggplot(x, aes(sample = value)) +
       stat_qq() +
       stat_qq_line() +
       facet_wrap(vars(.data[[group_var]]), scales = "free") +
-      labs(title = paste0(prefix, " – ", iso, " (Q–Q by ", group_var, ")")) +
+      labs(
+        title = paste0(prefix, " – ", iso_labels_text[[iso]], " (Q–Q by ", group_var, ")"),
+        x = "Theoretical Quantiles",
+        y = "Sample Quantiles"
+      ) +
       theme_classic()
-    
-    ggsave(file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_ridge.png")),
-           p_ridge, width = 9, height = 5, dpi = 300)
-    ggsave(file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_box.png")),
-           p_box, width = 9, height = 5, dpi = 300)
-    ggsave(file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_qq.png")),
-           p_qq, width = 10, height = 6, dpi = 300)
+
+    ggsave(
+      file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_ridge.png")),
+      p_ridge, width = 9, height = 5, dpi = 300
+    )
+    ggsave(
+      file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_box.png")),
+      p_box, width = 9, height = 5, dpi = 300
+    )
+    ggsave(
+      file.path(plot_dir, paste0(prefix, "_", group_var, "_", iso, "_qq.png")),
+      p_qq, width = 10, height = 6, dpi = 300
+    )
   }
 }
 
-# ---------------- Diagnostics helpers ----------------
+
 shapiro_by_group <- function(df_long, group_var) {
   df_long %>%
     filter(!is.na(.data[[group_var]])) %>%
@@ -85,7 +121,10 @@ shapiro_by_group <- function(df_long, group_var) {
       .groups = "drop"
     ) %>%
     rename(group = all_of(group_var)) %>%
-    mutate(group = as.character(group))
+    mutate(
+      group = as.character(group),
+      isotope = iso_labels_text[isotope]
+    )
 }
 
 levene_by_group <- function(df_long, group_var) {
@@ -110,20 +149,21 @@ levene_by_group <- function(df_long, group_var) {
         )
       }
     }) %>%
-    ungroup()
+    ungroup() %>%
+    mutate(isotope = iso_labels_text[isotope])
 }
 
-# ---------------- Adaptive test function ----------------
+
 run_adaptive_test <- function(df, group_var, alpha = 0.05) {
   df <- df %>%
     filter(!is.na(value), !is.na(.data[[group_var]])) %>%
     mutate(group = as.factor(.data[[group_var]]))
-  
+
   group_counts <- df %>%
     count(group, name = "n")
-  
+
   n_groups <- n_distinct(df$group)
-  
+
   if (n_groups < 2) {
     return(list(
       shapiro = tibble(group = NA_character_, n = NA_integer_, W = NA_real_, p = NA_real_),
@@ -136,10 +176,11 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
         omnibus_statistic = NA_real_,
         omnibus_p = NA_real_
       ),
-      posthoc = tibble()
+      posthoc = tibble(),
+      counts = tibble(group = NA_character_, n = NA_integer_)
     ))
   }
-  
+
   # Shapiro by group
   shapiro_res <- df %>%
     group_by(group) %>%
@@ -149,19 +190,17 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
       p = if (n() >= 3 && n() <= 5000) shapiro.test(value)$p.value else NA_real_,
       .groups = "drop"
     )
-  
+
   valid_shapiro <- shapiro_res %>% filter(!is.na(p))
-  
-  # Programmable rule for "normality met":
-  # all groups with valid Shapiro tests must have p > alpha
+
   normality_ok <- if (nrow(valid_shapiro) == 0) FALSE else all(valid_shapiro$p > alpha)
-  
+
   # Levene
   lev <- tryCatch(
     car::leveneTest(value ~ group, data = df, center = median),
     error = function(e) NULL
   )
-  
+
   levene_res <- if (is.null(lev)) {
     tibble(statistic = NA_real_, p = NA_real_)
   } else {
@@ -170,14 +209,14 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
       p = unname(lev[1, "Pr(>F)"])
     )
   }
-  
+
   variance_ok <- !is.na(levene_res$p[1]) && levene_res$p[1] > alpha
-  
+
   # Choose omnibus + posthoc
   if (normality_ok && variance_ok) {
     fit <- aov(value ~ group, data = df)
     fit_sum <- summary(fit)[[1]]
-    
+
     decision <- tibble(
       method = "ANOVA",
       normality_ok = TRUE,
@@ -186,7 +225,7 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
       omnibus_statistic = unname(fit_sum[1, "F value"]),
       omnibus_p = unname(fit_sum[1, "Pr(>F)"])
     )
-    
+
     posthoc <- TukeyHSD(fit)$group %>%
       as.data.frame() %>%
       tibble::rownames_to_column("comparison") %>%
@@ -198,10 +237,10 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
         p.adj = `p adj`
       ) %>%
       mutate(posthoc_method = "Tukey HSD")
-    
+
   } else if (normality_ok && !variance_ok) {
     welch <- oneway.test(value ~ group, data = df, var.equal = FALSE)
-    
+
     decision <- tibble(
       method = "Welch ANOVA",
       normality_ok = TRUE,
@@ -210,17 +249,17 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
       omnibus_statistic = unname(welch$statistic),
       omnibus_p = unname(welch$p.value)
     )
-    
+
     posthoc <- rstatix::games_howell_test(df, value ~ group) %>%
       as_tibble() %>%
       mutate(
         comparison = paste(group1, group2, sep = " - "),
         posthoc_method = "Games-Howell"
       )
-    
+
   } else {
     kw <- rstatix::kruskal_test(df, value ~ group)
-    
+
     decision <- tibble(
       method = "Kruskal-Wallis",
       normality_ok = FALSE,
@@ -229,7 +268,7 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
       omnibus_statistic = kw$statistic,
       omnibus_p = kw$p
     )
-    
+
     posthoc <- rstatix::pairwise_wilcox_test(
       df,
       value ~ group,
@@ -241,7 +280,7 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
         posthoc_method = "Pairwise Mann-Whitney U"
       )
   }
-  
+
   list(
     shapiro = shapiro_res,
     levene = levene_res,
@@ -251,14 +290,14 @@ run_adaptive_test <- function(df, group_var, alpha = 0.05) {
   )
 }
 
-# ---------------- Run all isotopes for one grouping variable ----------------
+
 run_for_all_isotopes <- function(df_long, group_var, alpha = 0.05) {
   isotopes <- unique(df_long$isotope)
-  
+
   res_list <- lapply(isotopes, function(iso) {
     x <- df_long %>% filter(isotope == iso)
     res <- run_adaptive_test(x, group_var, alpha = alpha)
-    
+
     list(
       shapiro = res$shapiro %>% mutate(isotope = iso, .before = 1),
       levene = res$levene %>% mutate(isotope = iso, .before = 1),
@@ -267,23 +306,33 @@ run_for_all_isotopes <- function(df_long, group_var, alpha = 0.05) {
       counts = res$counts %>% mutate(isotope = iso, .before = 1)
     )
   })
-  
+
   bind_or_empty <- function(lst, name) {
     out <- lapply(res_list, `[[`, name)
     out <- out[lengths(out) > 0]
     if (length(out) == 0) tibble() else bind_rows(out)
   }
-  
-  list(
+
+  out <- list(
     shapiro = bind_or_empty(res_list, "shapiro"),
     levene = bind_or_empty(res_list, "levene"),
     decision = bind_or_empty(res_list, "decision"),
     posthoc = bind_or_empty(res_list, "posthoc"),
     counts = bind_or_empty(res_list, "counts")
   )
+
+
+  out <- lapply(out, function(df) {
+    if ("isotope" %in% names(df)) {
+      df <- df %>% mutate(isotope = iso_labels_text[isotope])
+    }
+    df
+  })
+
+  out
 }
 
-# ---------------- Save plots ----------------
+
 save_plots(long, "site", "Sites")
 
 cent <- long %>%
@@ -292,11 +341,9 @@ cent <- long %>%
 
 save_plots(cent, "century", "Centuries")
 
-# ---------------- Run adaptive stats ----------------
 site_results <- run_for_all_isotopes(long, "site", alpha = 0.05)
 cent_results <- run_for_all_isotopes(cent, "century", alpha = 0.05)
 
-# ---------------- Export Excel ----------------
 wb <- createWorkbook()
 
 add_sheet <- function(name, df) {
