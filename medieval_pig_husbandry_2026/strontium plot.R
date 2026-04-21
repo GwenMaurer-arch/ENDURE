@@ -1,40 +1,87 @@
-# Install packages first if needed:
-# install.packages(c("readxl", "ggplot2", "viridis", "scales"))
-
 library(readxl)
+library(dplyr)
 library(ggplot2)
 library(viridis)
+library(ggbeeswarm)
 library(scales)
 
-# Read in the Excel file
-df <- read_excel("strontium.xlsx")
 
-# Make Site a factor
-df$Site <- factor(df$Site)
+df <- read_excel("sulfursr.xlsx")
 
-# Create plot
-ggplot(df, aes(x = Site, y = strontium, fill = Site)) +
-  geom_point(
-    shape = 21,
-    size = 2.5,
+colnames(df) <- df[1, ]
+df <- df[-1, ]
+
+
+df <- df %>%
+  rename(
+    Site = Site,
+    Sr = `Enamel Results`
+  ) %>%
+  mutate(
+    Sr = as.numeric(Sr),
+    Site = factor(Site)
+  ) %>%
+  filter(!is.na(Sr), !is.na(Site))
+
+
+sites <- levels(df$Site)
+viridis_cols <- viridis(length(sites))
+names(viridis_cols) <- sites
+
+
+p <- ggplot(df, aes(x = Site, y = Sr, fill = Site)) +
+  
+
+  geom_boxplot(
+    width = 0.3,
+    outlier.shape = NA,
+    fill = "white",
     colour = "black",
-    stroke = 0.5
+    linewidth = 0.5
   ) +
-  scale_fill_viridis_d(option = "viridis") +
+  
+  geom_beeswarm(
+    shape = 21,
+    fill = viridis_cols[df$Site],
+    colour = "black",
+    stroke = 0.5,
+    size = 2.6,
+    alpha = 1,
+    cex = 2.5,
+    priority = "density",
+    groupOnX = TRUE
+  ) +
+  
+  scale_fill_manual(values = viridis_cols) +
+  
+  # 4 decimal axis
   scale_y_continuous(
-    limits = c(0.7080, 0.7115),   # change these to make axis longer
-    labels = label_number(accuracy = 0.0001)
+    breaks = seq(0.708, 0.712, by = 0.001),
+    labels = number_format(accuracy = 0.0001)
   ) +
+  
   labs(
     x = "Site",
-    y = expression({}^{87}*Sr/{}^{86}*Sr~ratio)
+    y = expression({}^{87}*Sr/{}^{86}*Sr)
   ) +
+  
   theme_minimal(base_size = 12) +
   theme(
+    text = element_text(colour = "black"),
+    axis.title = element_text(colour = "black"),
+    axis.text = element_text(colour = "black"),
     axis.text.x = element_text(angle = 45, hjust = 1),
-    axis.line = element_line(colour = "black"),
-    axis.ticks = element_line(colour = "black"),
-    panel.grid.major = element_line(colour = "grey85", linewidth = 0.4),
-    panel.grid.minor = element_line(colour = "grey92", linewidth = 0.2),
+    panel.grid.major = element_line(colour = "grey85"),
+    panel.grid.minor = element_line(colour = "grey92"),
     legend.position = "none"
   )
+
+print(p)
+
+ggsave(
+  "sr_boxplot_beeswarm.png",
+  plot = p,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
